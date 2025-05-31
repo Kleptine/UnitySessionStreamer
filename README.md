@@ -29,7 +29,7 @@ Great care has been taken to make sure that the performance impact of the stream
 ```csharp
 using Core.Streaming;
 
-// Start a streaming session.
+// Run this at the start of your game.
 SessionStreamer.StartStreamingSession(
     hostUrl: "https://stream.yourserver.com",
     projectId: "your_project_id",
