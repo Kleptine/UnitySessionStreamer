@@ -90,6 +90,7 @@ namespace Core.Streaming
             DontDestroyOnLoad(streamGo);
 
             var streamer = streamGo.AddComponent<SessionStreamer>();
+            streamer.hostUrl = streamingServer;
             streamer.sessionId = sessionId;
             streamer.projectId = projectId;
             streamer.sessionMetadata = sessionMetadata.ToList();
@@ -108,7 +109,7 @@ namespace Core.Streaming
         private IEnumerator Start()
         {
             // The WHIP stream url to connect to. Metadata is encoded as query parameters.
-            string url = hostUrl + "whip?session_id=" + sessionId + "&project_id=" + projectId;
+            string url = hostUrl + "/whip?session_id=" + sessionId + "&project_id=" + projectId;
 
             foreach (var (key, value) in sessionMetadata)
             {
@@ -123,7 +124,7 @@ namespace Core.Streaming
                 url = urlWithParam;
             }
 
-            VerboseLog("WebRTC", $"Creating new stream on url [{url}]");
+            Debug.Log($"(SessionStreamer) Creating new stream on url [{url}]");
 
             // Create the Peer Connection. We use Google's STUN servers to detect our public IP address.
             var config = new RTCConfiguration

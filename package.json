@@ -1,6 +1,6 @@
 {
     "name": "com.pontoco.session-streamer",
-    "version": "0.9",
+    "version": "0.9.0",
     "displayName": "Session Streamer",
     "description": "Streams video and logs to a server for recording and viewing.",
     "documentationUrl": "https://github.com/Kleptine/SessionStreamer",
