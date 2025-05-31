@@ -37,6 +37,7 @@ using Core.Streaming;
 
 // Start a streaming session.
 SessionStreamer.StartStreamingSession(
+    hostUrl: "https://stream.yourserver.com",
     projectId: "your_project_id",
     sessionId: "unique_session_id",
     ("username", "player123"),
