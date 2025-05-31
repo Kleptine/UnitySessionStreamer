@@ -4,13 +4,14 @@
 
 The Session Streamer plugin for Unity provides an way to capture and stream video from your game's main camera, along with Unity logs and general event data, directly to a remote server for recording and session replay.
 
+Great care has been taken to make sure that the performance impact of the stream is near-zero. Noticeable performance overhead is considered a bug.
+
 ---
 
 ## Features
 
-* **Video Capture**: Streams real-time video captured from your main camera using WebRTC with hardware encoding for optimal performance.
+* **Video Capture**: Streams real-time video captured from your main camera using WebRTC with hardware encoding.
 * **Unity Logs**: Captures and streams the Unity `Player.log` file, providing detailed debugging and session insights.
-* **High Performance**: Great care has been taken to make sure that the performance impact of the stream is near-zero. 
 
 ---
 
@@ -45,8 +46,8 @@ SessionStreamer.StartStreamingSession(
 );
 ```
 
-* \`\`: Your unique project identifier. 
-* \`\`: A unique identifier for each streaming session (we recommend a time-sorted UUID).
+* `projectId`: Your unique project identifier. 
+* `sessionId`: A unique identifier for each streaming session (we recommend a time-sorted UUID).
 * **Metadata**: Optional key-value pairs that will be recorded and displayed in the viewer.
 
 ### Viewing Recorded Sessions
