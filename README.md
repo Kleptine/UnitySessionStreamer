@@ -60,8 +60,6 @@ Video compression is hardware accelerated. This means that captured frames are n
 
 Logs are streamed as opaque bytes directly from disk, skipping the Unity callback stack. Disk polling and streaming happens on a separate thread. Processing of the text stream (ie. splitting by new lines, converting text encodings) is done on the server during ingestion.
 
-Very little should happen during Update(), however memory allocations during Update are considered a bug and should be reported. 
-
 ---
 
 ## Development and Contributions

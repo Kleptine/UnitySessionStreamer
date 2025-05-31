@@ -548,13 +548,21 @@ namespace Core.Streaming
         {
             yield return new WaitForEndOfFrame();
 
+            var waitOp = new WaitForSeconds(1);
+            var statsOps = new List<RTCStatsReportAsyncOperation>();
+
+            foreach (var sender in pc.GetSenders())
+            {
+                statsOps.Add(sender.GetStats());
+            }
+
             while (true)
             {
-                yield return new WaitForSeconds(1);
+                yield return waitOp;
 
-                foreach (var sender in pc.GetSenders())
+                foreach (var op in statsOps)
                 {
-                    var op = sender.GetStats();
+                    op.Reset();
                     yield return op;
 
                     int senderIdx = 0;
@@ -586,9 +594,10 @@ namespace Core.Streaming
         private IEnumerator RecordScreenFrames()
         {
             Debug.Log("(SessionStreamer) Start recording screen captures to stream to server.");
+            WaitForEndOfFrame waitOp = new WaitForEndOfFrame();
             while (true)
             {
-                yield return new WaitForEndOfFrame();
+                yield return waitOp;
                 ScreenCapture.CaptureScreenshotIntoRenderTexture(capturedScreenTexture);
                 Graphics.Blit(capturedScreenTexture, sessionScreenTexture);
                 statVideoFramesCaptured++;
