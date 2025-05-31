@@ -2,7 +2,7 @@
 
 **Easily stream video and logs from your Unity project using WebRTC.**
 
-The Session Streamer plugin is a development and playtest tool that streams video from your game's main camera, along with Unity logs and general event data, directly to a remote server for recording and session replay. 
+The Session Streamer plugin is a playtest tool that streams video from the game's main camera, along with Unity logs and general event data, directly to a remote server for recording and session replay.
 
 Great care has been taken to make sure that the performance impact of the stream is near-zero[^2]. Noticeable performance overhead is considered a bug.
 
