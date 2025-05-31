@@ -24,7 +24,7 @@ The Session Streamer plugin for Unity provides an way to capture and stream vide
 
 2. **Install dependencies**:
 
-   * Ensure the official Unity WebRTC package is installed from the Unity Package Manager.
+   * Ensure the official [Unity WebRTC package](https://docs.unity3d.com/Packages/com.unity.webrtc@2.4/manual/index.html) is installed from the Unity Package Manager.
 
 ---
 
