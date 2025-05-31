@@ -8,13 +8,6 @@ Great care has been taken to make sure that the performance impact of the stream
 
 ---
 
-## Features
-
-* **Video Capture**: Streams real-time video captured from your main camera using WebRTC with hardware encoding.
-* **Unity Logs**: Captures and streams the Unity `Player.log` file, providing detailed debugging and session insights.
-
----
-
 ## Installation
 
 1. **Clone the repository** into your Unity project's `Assets/Plugins` directory:
