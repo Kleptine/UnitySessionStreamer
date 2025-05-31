@@ -1,6 +1,6 @@
 // Enable this #define to output verbose logs from the WebRTC peer connection.
 
-#define SESSION_STREAMING_VERBOSE_LOGGING
+// #define SESSION_STREAMING_VERBOSE_LOGGING
 
 // This service sends several streams to the server:
 //  - Video capture of the main camera (captured using render textures and sent through the hardware encoder)
