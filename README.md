@@ -4,7 +4,7 @@
 
 The Session Streamer plugin for Unity provides an way to capture and stream video from your game's main camera, along with Unity logs and general event data, directly to a remote server for recording and session replay.
 
-Great care has been taken to make sure that the performance impact of the stream is near-zero. Noticeable performance overhead is considered a bug.
+Great care has been taken to make sure that the performance impact of the stream is near-zero[^2]. Noticeable performance overhead is considered a bug.
 
 ---
 
@@ -85,3 +85,4 @@ Contributions, feature requests, and bug reports are welcome:
 This client plugin is available under the MIT License. See `LICENSE` for more details.
 
 [^1]: 1280x720 is also the maximum supported resolution for H264 Hardware encoding on many platforms. 
+[^2]: On modern platforms with hardware encoding support.
