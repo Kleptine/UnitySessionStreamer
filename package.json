@@ -1,0 +1,15 @@
+{
+    "name": "com.pontoco.session-streamer",
+    "version": "0.9",
+    "displayName": "Session Streamer",
+    "description": "Streams video and logs to a server for recording and viewing.",
+    "documentationUrl": "https://github.com/Kleptine/SessionStreamer",
+    "licensesUrl": "https://github.com/Kleptine/SessionStreamer/blob/main/LICENSE",
+    "dependencies": {
+        "com.unity.webrtc": "3.0.0-pre.8"
+    },
+    "author": {
+        "name": "John Austin",
+        "url": "https://johnaustin.io"
+    }
+}
