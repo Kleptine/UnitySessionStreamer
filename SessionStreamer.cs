@@ -17,8 +17,10 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -64,10 +66,19 @@ namespace Core.Streaming
         private long logBytesOnStartup;
 
         private int statVideoFramesCaptured;
-        
+
         // Time this client will wait for the Whip+WebRTC connection to connect. It doesn't make sense to wait any longer
         // because the WebRTC server connection will assume failure after ~10 seconds of never connecting.
         private const double ConnectionTimeoutSec = 10.0;
+
+        // Sometimes the Unity package never properly 'finishes' gathering ICE candidates, and instead just waits.
+        // But they were properly added, so instead we attempt to connect anyway with the candidates already gathered.
+        // Once we hit this timer, any ICE candidates we find will immediately sent to the WHIP.
+        private const double GatherTimeoutWithCandidatesFallbackSec = 0.5;
+
+        // If we receive no ICE Candidates within this time we call it, and assume the client machine cannot connect.
+        private const double
+            GatherTimeoutNoCandidatesSec = 5.0; // Should really not take more than 5 sec to find candidates.
 
         /// <summary>Connects to the streaming server, and then begins streaming data to it.</summary>
         /// <param name="streamingServer">The URL of the server to stream to.</param>
@@ -141,10 +152,11 @@ namespace Core.Streaming
             pc = new RTCPeerConnection(ref config);
 
             // Some default logging.
-            List<string> iceCandidates = new();
+            DateTime startConnectTime = DateTime.Now;
+            List<(TimeSpan, string)> iceCandidates = new();
             pc.OnIceCandidate = candidate =>
             {
-                iceCandidates.Add(candidate.Address);
+                iceCandidates.Add((DateTime.Now - startConnectTime, candidate.Address));
                 VerboseLog("WebRTC", $"Found Ice Candidate: [{candidate.Address}]");
             };
             pc.OnIceConnectionChange = state => VerboseLog("WebRTC", $"Ice Connection Changed: {state}");
@@ -257,18 +269,48 @@ namespace Core.Streaming
             DateTime beginTime = DateTime.Now;
             while (pc.GatheringState != RTCIceGatheringState.Complete)
             {
-                if (DateTime.Now - beginTime > TimeSpan.FromSeconds(ConnectionTimeoutSec))
+                if (DateTime.Now - beginTime > TimeSpan.FromSeconds(GatherTimeoutWithCandidatesFallbackSec) &&
+                    iceCandidates.Count > 1)
                 {
-                    // This is a bug. We should always be able to gather ice candidates.
-                    StringBuilder builder = new();
+                    bool foundNonLocal = false;
                     foreach (var candidate in iceCandidates)
                     {
-                        builder.AppendLine(candidate);
+                        if (!IsLocalIpAddress(candidate.Item2))
+                        {
+                            foundNonLocal = true;
+                        }
                     }
-                    Debug.LogWarning($"(SessionStreamer) Waiting for Connection Gathering to complete. Attempting with [{iceCandidates.Count}] candidates:"+builder);
-                    break;
+
+                    if (foundNonLocal)
+                    {
+                        // Unity sometimes doesn't properly end gathering of candidates. So we fire a WHIP request after
+                        // a short wait as long as we have at least one non-local ICE candidate.
+                        StringBuilder builder = new();
+                        foreach (var candidate in iceCandidates)
+                        {
+                            builder.Append(candidate.Item1);
+                            builder.Append(IsLocalIpAddress(candidate.Item2)? "(local)" : "(remote)");
+                            builder.AppendLine(candidate.Item2);
+                        }
+
+                        Debug.LogWarning($"(SessionStreamer) Candidate gathering took too long, but we found a remote interface." +
+                                         $" Attempting with [{iceCandidates.Count}] candidates:" + builder);
+                        break;
+                    }
                 }
                 
+                if (DateTime.Now - beginTime > TimeSpan.FromSeconds(GatherTimeoutNoCandidatesSec))
+                {
+                    // Quit. We found no ice candidates within a meaty timeout. 
+                    // This means that either there's truly no network interface on this device, or more likely,
+                    // the candidate gathering failed or was blocked somehow. In any case, there's no way to connect
+                    // to the server.
+                    Debug.LogWarning(
+                        $"(SessionStreamer) Could not find a network interface to connect to the server on. Skipping stream.");
+                    yield break;
+                }
+                
+
                 yield return null;
             }
 
@@ -295,7 +337,6 @@ namespace Core.Streaming
                         $"(SessionStreamer) Failed to connect to server. ({res.StatusCode}, \"{body}\"). Url: [{url}]");
                     return null;
                 }
-
 
                 VerboseLog($"WebRTC", $"Received successful WHIP response. SDP Answer is:\n{body}");
                 return body;
@@ -343,7 +384,7 @@ namespace Core.Streaming
                     Debug.LogWarning("(SessionStreamer) Timed out waiting for WebRTC to connect. Skipping session.");
                     yield break;
                 }
-                
+
                 yield return null;
             }
 
@@ -355,7 +396,7 @@ namespace Core.Streaming
             }
 
             VerboseLog("WebRTC", "WebRTC Connected!");
-            
+
             string sessionViewingUrl = hostUrl + $"/sessions/{projectId}/{sessionId}";
 
             Debug.Log(Application.isEditor
@@ -438,7 +479,7 @@ namespace Core.Streaming
                 VerboseLog("SessionStreamer", $"Couldn't send server message. Data channel not created.");
                 return;
             }
-            
+
             if (generalDataChannel.ReadyState != RTCDataChannelState.Open)
             {
                 VerboseLog("SessionStreamer",
@@ -740,6 +781,40 @@ namespace Core.Streaming
             }
 
             VerboseLog("WebRTC", "Dispose ok");
+        }
+        
+        public static bool IsLocalIpAddress(string ipAddressString)
+        {
+            if (ipAddressString.StartsWith("192.168"))
+            {
+                return true;
+            }
+            
+            if (IPAddress.TryParse(ipAddressString, out IPAddress addr))
+            {
+                if (IPAddress.IsLoopback(addr)) return true; // handles 127/8 and ::1
+
+                if (addr.AddressFamily == AddressFamily.InterNetwork)         // IPv4
+                {
+                    var b = addr.GetAddressBytes();
+                    return b[0] switch
+                    {
+                        10                              => true,              // 10/8
+                        172 when b[1] >= 16 && b[1] <= 31 => true,            // 172.16/12
+                        192 when b[1] == 168            => true,              // 192.168/16
+                        169 when b[1] == 254            => true,              // 169.254/16
+                        _                               => false
+                    };
+                }
+                else if (addr.AddressFamily == AddressFamily.InterNetworkV6)  // IPv6
+                {
+                    if (addr.IsIPv6LinkLocal) return true;
+                    var b = addr.GetAddressBytes();
+                    return (b[0] & 0xFE) == 0xFC;                             // fc00::/7 (fc or fd)
+                }
+                return false;
+            }
+            return false; // Assume public if not matched or parse failed
         }
     }
 }
