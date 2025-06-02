@@ -141,7 +141,12 @@ namespace Core.Streaming
             pc = new RTCPeerConnection(ref config);
 
             // Some default logging.
-            pc.OnIceCandidate = candidate => VerboseLog("WebRTC", $"Found Ice Candidate: [{candidate.Address}]");
+            List<string> iceCandidates = new();
+            pc.OnIceCandidate = candidate =>
+            {
+                iceCandidates.Add(candidate.Address);
+                VerboseLog("WebRTC", $"Found Ice Candidate: [{candidate.Address}]");
+            };
             pc.OnIceConnectionChange = state => VerboseLog("WebRTC", $"Ice Connection Changed: {state}");
             pc.OnIceGatheringStateChange = state => VerboseLog("WebRTC", $"Ice Gather state changed: {state}");
             pc.OnTrack = e => VerboseLog("WebRTC", $"OnTrack: {e.Track.Kind} id={e.Track.Id}");
@@ -211,6 +216,11 @@ namespace Core.Streaming
                 encoding.maxFramerate = 30;
             }
 
+            foreach (var transceiver in pc.GetTransceivers())
+            {
+                transceiver.Direction = RTCRtpTransceiverDirection.SendOnly;
+            }
+
             ValidateTransceivers();
 
             // Begin polling for Ice Candidates.
@@ -250,8 +260,13 @@ namespace Core.Streaming
                 if (DateTime.Now - beginTime > TimeSpan.FromSeconds(ConnectionTimeoutSec))
                 {
                     // This is a bug. We should always be able to gather ice candidates.
-                    Debug.LogError($"(SessionStreamer) Timed out waiting for Ice Gathering to complete. [{pc.GatheringState}]");
-                    yield break;
+                    StringBuilder builder = new();
+                    foreach (var candidate in iceCandidates)
+                    {
+                        builder.AppendLine(candidate);
+                    }
+                    Debug.LogWarning($"(SessionStreamer) Waiting for Connection Gathering to complete. Attempting with [{iceCandidates.Count}] candidates:"+builder);
+                    break;
                 }
                 
                 yield return null;
@@ -549,20 +564,14 @@ namespace Core.Streaming
             yield return new WaitForEndOfFrame();
 
             var waitOp = new WaitForSeconds(1);
-            var statsOps = new List<RTCStatsReportAsyncOperation>();
-
-            foreach (var sender in pc.GetSenders())
-            {
-                statsOps.Add(sender.GetStats());
-            }
 
             while (true)
             {
                 yield return waitOp;
 
-                foreach (var op in statsOps)
+                foreach (var sender in pc.GetSenders())
                 {
-                    op.Reset();
+                    var op = sender.GetStats();
                     yield return op;
 
                     int senderIdx = 0;
@@ -575,7 +584,7 @@ namespace Core.Streaming
                                 $"=> Frames encoded: {outboundStat.framesEncoded} " +
                                 $"=> bytes sent: {outboundStat.bytesSent}");
                             if (outboundStat.bytesSent == 0 &&
-                                (outboundStat.framesEncoded > 100 || statVideoFramesCaptured > 100))
+                                (outboundStat.framesEncoded > 250 || statVideoFramesCaptured > 250))
                             {
                                 Debug.LogError(
                                     "(SessionStreamer) Video stream is not sending to server. Check configuration.");

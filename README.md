@@ -60,6 +60,9 @@ Video compression is hardware accelerated. This means that captured frames are n
 
 Logs are streamed as opaque bytes directly from disk, skipping the Unity callback stack. Disk polling and streaming happens on a separate thread. Processing of the text stream (ie. splitting by new lines, converting text encodings) is done on the server during ingestion.
 
+## Debugging
+Verbose debugging logs can be enabled with the `SESSION_STREAMING_VERBOSE_LOGGING` C# pre-processor define.
+
 ---
 
 ## Development and Contributions
