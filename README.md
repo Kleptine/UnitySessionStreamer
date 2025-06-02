@@ -10,15 +10,7 @@ Great care has been taken to make sure that the performance impact of the stream
 
 ## Installation
 
-1. **Clone the repository** into your Unity project's `Assets/Plugins` directory:
-
-   ```bash
-   git clone https://github.com/yourusername/session-streamer-unity.git Assets/Plugins/SessionStreamer
-   ```
-
-2. **Install dependencies**:
-
-   * Ensure the official [Unity WebRTC package](https://docs.unity3d.com/Packages/com.unity.webrtc@2.4/manual/index.html) is installed from the Unity Package Manager.
+This package can be installed either by using Unity's instructions for "[Installing a Git Package](https://docs.unity3d.com/6000.1/Documentation/Manual/upm-ui-giturl.html)". Alternatively, you can clone or copy this folder anywhere in your project folder.
 
 ---
 
@@ -52,6 +44,10 @@ https://stream.yourserver.com/sessions/<projectId>/<sessionId>
 ```
 
 The session link will also be emitted in the Unity log for easy access.
+
+### Running in the Editor
+
+Session Streamer *can* run in the Editor during Play Mode, in which case the Editor.log will be streamed instead of the Player.log. 
 
 ---
 
