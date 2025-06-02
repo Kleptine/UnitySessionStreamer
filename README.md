@@ -45,6 +45,10 @@ https://stream.yourserver.com/sessions/<projectId>/<sessionId>
 
 The session link will also be emitted in the Unity log for easy access.
 
+### Running in the Editor
+
+Session Streamer *can* run in the Editor during Play Mode, in which case the Editor.log will be streamed instead of the Player.log. 
+
 ---
 
 ## Performance
