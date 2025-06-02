@@ -624,13 +624,20 @@ namespace Core.Streaming
                                 $"Frames captured: {statVideoFramesCaptured} " +
                                 $"=> Frames encoded: {outboundStat.framesEncoded} " +
                                 $"=> bytes sent: {outboundStat.bytesSent}");
-                            if (outboundStat.bytesSent == 0 &&
-                                (outboundStat.framesEncoded > 250 || statVideoFramesCaptured > 250))
+                            if (outboundStat.framesEncoded > 250 || statVideoFramesCaptured > 250)
                             {
-                                Debug.LogError(
-                                    "(SessionStreamer) Video stream is not sending to server. Check configuration.");
-                                ValidateTransceivers();
-                                yield break;
+                                if (outboundStat.bytesSent == 0)
+                                {
+                                    Debug.LogError(
+                                        "(SessionStreamer) Video stream is not sending to server. Check configuration.");
+                                    ValidateTransceivers();
+                                    yield break;
+                                }
+                                else
+                                {
+                                    VerboseLog("SessionStreamer", "Data is sending. All good.");
+                                    yield break;
+                                }
                             }
                         }
 
