@@ -21,10 +21,12 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
+using Unity.Profiling;
 using Unity.Serialization.Json;
 using Unity.WebRTC;
 using UnityEditor;
@@ -47,6 +49,7 @@ namespace Core.Streaming
         private string hostUrl;
         private string sessionId;
         private string projectId;
+        private bool streamDebugLogs;
         private List<(string, string)> sessionMetadata;
 
         // WebRTC state
@@ -56,15 +59,19 @@ namespace Core.Streaming
         private RTCPeerConnection pc;
         private RTCDataChannel generalDataChannel;
         private RTCDataChannel logDataChannel;
+        private RTCDataChannel structuredLogDataChannel;
 
         // Recording video from the screen
         private RenderTexture capturedScreenTexture; // This is the resolution of the screen.
         private RenderTexture sessionScreenTexture; // This is the resolution of the stream.
-        private PollingFileTailer playerLogReader;
 
         // The size of the Unity log on startup. Used in editor to make sure we read from the correct place.
         private long logBytesOnStartup;
-
+        
+        // Background threads that send text and structured logs to the server.
+        private PollingFileTailer playerLogReader;
+        private AsyncLogSender structuredLogSender;
+        
         private int statVideoFramesCaptured;
 
         // Time this client will wait for the Whip+WebRTC connection to connect. It doesn't make sense to wait any longer
@@ -77,15 +84,20 @@ namespace Core.Streaming
         private const double GatherTimeoutWithCandidatesFallbackSec = 0.5;
 
         // If we receive no ICE Candidates within this time we call it, and assume the client machine cannot connect.
-        private const double
-            GatherTimeoutNoCandidatesSec = 5.0; // Should really not take more than 5 sec to find candidates.
+        private const double GatherTimeoutNoCandidatesSec = 5.0; // Should really not take more than 5 sec to find candidates.
 
         /// <summary>Connects to the streaming server, and then begins streaming data to it.</summary>
         /// <param name="streamingServer">The URL of the server to stream to.</param>
         /// <param name="projectId">The project id to file this session under.</param>
         /// <param name="sessionId">A unique identifier for every session. We recommend a time-sorted UUID.</param>
+        /// <param name="streamDebugLogs">
+        ///     Whether to stream the C# Debug.Log messages Unity receives, and associated stack traces.
+        ///     Has a small performance impact because Unity doesn't normally send these to C# unless requested, so it must convert
+        ///     the logs and stack traces to UTF16 and call into managed code.
+        /// </param>
         /// <param name="sessionMetadata">Any additional metadata to send along with the session. Displayed in the viewer.</param>
         public static void StartStreamingSession(string streamingServer, string projectId, string sessionId,
+                                                 bool streamDebugLogs,
                                                  params (string metadataKey, string metadataValue)[] sessionMetadata)
         {
             // Grab the current size of the Unity.log. In the editor, this is useful so that we start streaming logs
@@ -101,21 +113,29 @@ namespace Core.Streaming
             DontDestroyOnLoad(streamGo);
 
             var streamer = streamGo.AddComponent<SessionStreamer>();
+            
+            // Start receiving log messges. We do this as early as possible.
+            streamer.structuredLogSender = new AsyncLogSender();
+            
             streamer.hostUrl = streamingServer;
             streamer.sessionId = sessionId;
             streamer.projectId = projectId;
             streamer.sessionMetadata = sessionMetadata.ToList();
             streamer.logBytesOnStartup = logSize;
+            streamer.streamDebugLogs = streamDebugLogs;
 
             // Default metadata.
             streamer.sessionMetadata.Add(("timestamp_utc",
                 XmlConvert.ToString(DateTime.Now, XmlDateTimeSerializationMode.Utc)));
             streamer.sessionMetadata.Add(("timezone", TimeZoneInfo.Local.Id));
             streamer.sessionMetadata.Add(("is_editor", Application.isEditor ? "true" : "false"));
+            streamer.sessionMetadata.Add(("engine", "unity"));
+            streamer.sessionMetadata.Add(("client_version", "1"));
         }
 
         /// <summary>
-        /// The WebRTC connection must use a coroutine, because the WebRTC APIs are not thread safe and must be run on the main thread.
+        ///     The WebRTC connection must use a coroutine, because the WebRTC APIs are not thread safe and must be run on the
+        ///     main thread.
         /// </summary>
         private IEnumerator Start()
         {
@@ -128,7 +148,7 @@ namespace Core.Streaming
                 if (!Uri.IsWellFormedUriString(url, UriKind.Absolute))
                 {
                     Debug.LogError(
-                        $"(SessionStreamer) Metadata key/value is not valid URL string: [{key}={value}]. Skipping.");
+                        $"(SessionStreamer) Metadata key/value is not valid URL string: [{key}={value}]. Skipping. [{url}]");
                     continue;
                 }
 
@@ -169,12 +189,12 @@ namespace Core.Streaming
             generalDataChannel = pc.CreateDataChannel("general");
             generalDataChannel.OnMessage = HandleServerMessage;
 
-            // Unity Log Data Channel: Streams the Unity Player.log file.
+            // Unity Full Log Data Channel: Streams the Unity Player.log file.
             // Timestamps are applied during polling of this file, and are in nanoseconds since the Unix epoch (UTC).
             if (!string.IsNullOrEmpty(Application.consoleLogPath))
             {
-                VerboseLog("SessionStreamer", "Adding Unity logs channel: [unity_log]");
-                logDataChannel = pc.CreateDataChannel("unity_log", new RTCDataChannelInit
+                VerboseLog("SessionStreamer", "Adding Unity logs channel: [text_log]");
+                logDataChannel = pc.CreateDataChannel("text_log", new RTCDataChannelInit
                 {
                     // This is our custom timestamped format so we can associate logs with the time they originated.
                     // Each data packet sent is prepended with the timestamp (nanos since unix epoch)
@@ -192,6 +212,22 @@ namespace Core.Streaming
                     kind = ClientMessageKind.Info
                 });
                 Debug.LogWarning("(SessionStreamer)" + message);
+            }
+
+            // Unity Structured C# Log
+            // Streams the Log, Warning, Error, etc objects that come from Unity's callback. 
+            // Will not report native errors, but useful for knowing precisely about gameplay errors.
+            if (streamDebugLogs)
+            {
+                structuredLogDataChannel = pc.CreateDataChannel("structured_log", new RTCDataChannelInit
+                {
+                    // Each message is a byte-packed buffer of the timestamp, log type, stack trace, and message.
+                    // See the sending function for more details.
+                    protocol = "structured_log_unity_packed"
+                });
+
+                structuredLogDataChannel.OnOpen = StartStreamingDebugLogs;
+                structuredLogDataChannel.OnClose = StopStreamingDebugLogs;
             }
 
             // Video Track: Records the main camera video.
@@ -289,16 +325,17 @@ namespace Core.Streaming
                         foreach (var candidate in iceCandidates)
                         {
                             builder.Append(candidate.Item1);
-                            builder.Append(IsLocalIpAddress(candidate.Item2)? "(local)" : "(remote)");
+                            builder.Append(IsLocalIpAddress(candidate.Item2) ? "(local)" : "(remote)");
                             builder.AppendLine(candidate.Item2);
                         }
 
-                        Debug.LogWarning($"(SessionStreamer) Candidate gathering took too long, but we found a remote interface." +
-                                         $" Attempting with [{iceCandidates.Count}] candidates:" + builder);
+                        Debug.LogWarning(
+                            "(SessionStreamer) Candidate gathering took too long, but we found a remote interface." +
+                            $" Attempting with [{iceCandidates.Count}] candidates:" + builder);
                         break;
                     }
                 }
-                
+
                 if (DateTime.Now - beginTime > TimeSpan.FromSeconds(GatherTimeoutNoCandidatesSec))
                 {
                     // Quit. We found no ice candidates within a meaty timeout. 
@@ -306,10 +343,9 @@ namespace Core.Streaming
                     // the candidate gathering failed or was blocked somehow. In any case, there's no way to connect
                     // to the server.
                     Debug.LogWarning(
-                        $"(SessionStreamer) Could not find a network interface to connect to the server on. Skipping stream.");
+                        "(SessionStreamer) Could not find a network interface to connect to the server on. Skipping stream.");
                     yield break;
                 }
-                
 
                 yield return null;
             }
@@ -325,7 +361,7 @@ namespace Core.Streaming
                 var content = new StringContent(pc.LocalDescription.sdp);
                 content.Headers.ContentType = new MediaTypeHeaderValue("application/sdp");
 
-                VerboseLog($"WebRTC", $"Send POST request to WHIP URL: {uri}");
+                VerboseLog("WebRTC", $"Send POST request to WHIP URL: {uri}");
                 var client = new HttpClient();
                 var res = await client.PostAsync(uri, content);
 
@@ -333,12 +369,11 @@ namespace Core.Streaming
 
                 if (!res.IsSuccessStatusCode)
                 {
-                    Debug.LogError(
+                    throw new Exception(
                         $"(SessionStreamer) Failed to connect to server. ({res.StatusCode}, \"{body}\"). Url: [{url}]");
-                    return null;
                 }
 
-                VerboseLog($"WebRTC", $"Received successful WHIP response. SDP Answer is:\n{body}");
+                VerboseLog("WebRTC", $"Received successful WHIP response. SDP Answer is:\n{body}");
                 return body;
             });
 
@@ -347,8 +382,8 @@ namespace Core.Streaming
 
             if (task.Exception != null)
             {
-                Debug.Log(
-                    $"(SessionStreamer): Couldn't connect to server. Skipping stream. [{task.Exception.Message}]");
+                Debug.LogWarning(
+                    $"(SessionStreamer): Couldn't connect to server. Skipping stream. Details:\nurl:[{url}]\n\nException:\n{task.Exception.Message}\n\nInnerExceptions:\n{string.Join("\n\n", task.Exception.InnerExceptions)}");
                 yield break;
             }
 
@@ -410,6 +445,23 @@ namespace Core.Streaming
             StartCoroutine(RecordScreenFrames());
             StartCoroutine(CheckStats());
         }
+
+        private void StartStreamingDebugLogs()
+        {
+            // Send the logs we queued up before connecting to the structured logs.
+            structuredLogSender.BeginSending(packet =>
+            {
+                // Note: This lambda is called from a background thread!
+                SendPacket(structuredLogDataChannel, packet.AsMemory());
+            });
+        }
+
+        private void StopStreamingDebugLogs()
+        {
+            structuredLogSender?.Dispose();
+            structuredLogSender = null;
+        }
+
 
         private void ValidateTransceivers()
         {
@@ -476,7 +528,7 @@ namespace Core.Streaming
         {
             if (generalDataChannel == null)
             {
-                VerboseLog("SessionStreamer", $"Couldn't send server message. Data channel not created.");
+                VerboseLog("SessionStreamer", "Couldn't send server message. Data channel not created.");
                 return;
             }
 
@@ -633,11 +685,8 @@ namespace Core.Streaming
                                     ValidateTransceivers();
                                     yield break;
                                 }
-                                else
-                                {
-                                    VerboseLog("SessionStreamer", "Data is sending. All good.");
-                                    yield break;
-                                }
+                                VerboseLog("SessionStreamer", "Data is sending. All good.");
+                                yield break;
                             }
                         }
 
@@ -765,6 +814,10 @@ namespace Core.Streaming
             videoStream?.Dispose();
             videoStream = null;
 
+            // Drain and dispose the logs we've stored.
+            structuredLogSender?.Dispose();
+            structuredLogSender = null;
+
             // handleOnAudioFilterRead = null;
 
             audioStreamTrack?.Dispose();
@@ -789,35 +842,41 @@ namespace Core.Streaming
 
             VerboseLog("WebRTC", "Dispose ok");
         }
-        
+
         public static bool IsLocalIpAddress(string ipAddressString)
         {
             if (ipAddressString.StartsWith("192.168"))
             {
                 return true;
             }
-            
+
             if (IPAddress.TryParse(ipAddressString, out IPAddress addr))
             {
-                if (IPAddress.IsLoopback(addr)) return true; // handles 127/8 and ::1
+                if (IPAddress.IsLoopback(addr))
+                {
+                    return true; // handles 127/8 and ::1
+                }
 
-                if (addr.AddressFamily == AddressFamily.InterNetwork)         // IPv4
+                if (addr.AddressFamily == AddressFamily.InterNetwork) // IPv4
                 {
                     var b = addr.GetAddressBytes();
                     return b[0] switch
                     {
-                        10                              => true,              // 10/8
-                        172 when b[1] >= 16 && b[1] <= 31 => true,            // 172.16/12
-                        192 when b[1] == 168            => true,              // 192.168/16
-                        169 when b[1] == 254            => true,              // 169.254/16
-                        _                               => false
+                        10 => true, // 10/8
+                        172 when b[1] >= 16 && b[1] <= 31 => true, // 172.16/12
+                        192 when b[1] == 168 => true, // 192.168/16
+                        169 when b[1] == 254 => true, // 169.254/16
+                        _ => false
                     };
                 }
-                else if (addr.AddressFamily == AddressFamily.InterNetworkV6)  // IPv6
+                if (addr.AddressFamily == AddressFamily.InterNetworkV6) // IPv6
                 {
-                    if (addr.IsIPv6LinkLocal) return true;
+                    if (addr.IsIPv6LinkLocal)
+                    {
+                        return true;
+                    }
                     var b = addr.GetAddressBytes();
-                    return (b[0] & 0xFE) == 0xFC;                             // fc00::/7 (fc or fd)
+                    return (b[0] & 0xFE) == 0xFC; // fc00::/7 (fc or fd)
                 }
                 return false;
             }
