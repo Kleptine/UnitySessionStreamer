@@ -92,8 +92,7 @@ namespace Core.Streaming
         /// <param name="sessionId">A unique identifier for every session. We recommend a time-sorted UUID.</param>
         /// <param name="streamDebugLogs">
         ///     Whether to stream the C# Debug.Log messages Unity receives, and associated stack traces.
-        ///     Has a small performance impact because Unity doesn't normally send these to C# unless requested, so it must convert
-        ///     the logs and stack traces to UTF16 and call into managed code.
+        ///     Has a tiny performance impact because of the listener registered to Application.logMessageReceivedThreaded. Even if this is disabled, the Player.log will still be streamed.
         /// </param>
         /// <param name="sessionMetadata">Any additional metadata to send along with the session. Displayed in the viewer.</param>
         public static void StartStreamingSession(string streamingServer, string projectId, string sessionId,
@@ -127,7 +126,7 @@ namespace Core.Streaming
             // Default metadata.
             streamer.sessionMetadata.Add(("timestamp_utc",
                 XmlConvert.ToString(DateTime.Now, XmlDateTimeSerializationMode.Utc)));
-            streamer.sessionMetadata.Add(("timezone", TimeZoneInfo.Local.Id));
+            streamer.sessionMetadata.Add(("timezone", "Eastern Standard Time"));
             streamer.sessionMetadata.Add(("is_editor", Application.isEditor ? "true" : "false"));
             streamer.sessionMetadata.Add(("engine", "unity"));
             streamer.sessionMetadata.Add(("client_version", "1"));
@@ -144,8 +143,8 @@ namespace Core.Streaming
 
             foreach (var (key, value) in sessionMetadata)
             {
-                string urlWithParam = url + "&" + key + "=" + value;
-                if (!Uri.IsWellFormedUriString(url, UriKind.Absolute))
+                string urlWithParam = $"{url}&{Uri.EscapeDataString(key)}={Uri.EscapeDataString(value)}";
+                if (!Uri.IsWellFormedUriString(urlWithParam, UriKind.Absolute))
                 {
                     Debug.LogError(
                         $"(SessionStreamer) Metadata key/value is not valid URL string: [{key}={value}]. Skipping. [{url}]");
