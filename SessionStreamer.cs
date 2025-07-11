@@ -122,11 +122,17 @@ namespace Core.Streaming
             streamer.sessionMetadata = sessionMetadata.ToList();
             streamer.logBytesOnStartup = logSize;
             streamer.streamDebugLogs = streamDebugLogs;
+            
+            // We store a manual timezone offset, because TimeZoneInfo.Id is not implemented consistently on all platforms.
+            // Format the timezone offset into the ISO 8601 standard (e.g., +05:30 or -07:00).
+            TimeSpan offset = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now);
+            string formattedOffset = $"{(offset < TimeSpan.Zero ? "-" : "+")}{offset:hh\\:mm}";
 
             // Default metadata.
             streamer.sessionMetadata.Add(("timestamp_utc",
                 XmlConvert.ToString(DateTime.Now, XmlDateTimeSerializationMode.Utc)));
-            streamer.sessionMetadata.Add(("timezone", "Eastern Standard Time"));
+            streamer.sessionMetadata.Add(("timezone", TimeZoneInfo.Local.Id));
+            streamer.sessionMetadata.Add(("timezone_offset", formattedOffset));
             streamer.sessionMetadata.Add(("is_editor", Application.isEditor ? "true" : "false"));
             streamer.sessionMetadata.Add(("engine", "unity"));
             streamer.sessionMetadata.Add(("client_version", "1"));
