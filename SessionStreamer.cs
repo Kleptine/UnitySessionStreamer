@@ -160,7 +160,7 @@ namespace Core.Streaming
                 url = urlWithParam;
             }
 
-            Debug.Log($"(SessionStreamer) Creating new stream on url [{url}]");
+            Debug.Log($"(SessionStreamer) Requesting new stream on url [{url}]");
 
             // Create the Peer Connection. We use Google's STUN servers to detect our public IP address.
             var config = new RTCConfiguration
