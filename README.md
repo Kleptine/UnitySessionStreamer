@@ -39,7 +39,7 @@ SessionStreamer.StartStreamingSession(
     "https://stream.yourserver.com",
     "your_project_id",
     "unique_session_id",
-    username: "unique_user_id", // Used to group sessions from the same user in the web viewer.
+    username: "unique_user_id", // Used to group sessions from the same user in the web viewer. We use Environment.UserName.
     disableDebugLogs: false, // Disables sending structured "Debug.Log" logs from Unity.
     disableTextLogs: false, // Disables sending the Player.log or Editor.log file.
     showRecordingIcon: false, // Draws a tiny red dot in the corner of the screen when recording.
