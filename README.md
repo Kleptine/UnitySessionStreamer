@@ -23,17 +23,31 @@ using Core.Streaming;
 
 // Run this at the start of your game.
 SessionStreamer.StartStreamingSession(
-    hostUrl: "https://stream.yourserver.com",
-    projectId: "your_project_id",
-    sessionId: "unique_session_id",
-    ("username", "player123"),
-    ("session_type", "beta_test")
+    "https://stream.yourserver.com",
+    "your_project_id",
+    "unique_session_id"
+);
+
+```
+* `projectId`: Your unique project identifier.
+* `sessionId`: A unique identifier for the streaming session. We recommend a time-sorted UUID.
+
+For more configuration, you can set the optional parameters:
+
+```csharp
+SessionStreamer.StartStreamingSession(
+    "https://stream.yourserver.com",
+    "your_project_id",
+    "unique_session_id",
+    username: "unique_user_id", // Used to group sessions from the same user in the web viewer.
+    disableDebugLogs: false, // Disables sending structured "Debug.Log" logs from Unity.
+    disableTextLogs: false, // Disables sending the Player.log or Editor.log file.
+    showRecordingIcon: false, // Draws a tiny red dot in the corner of the screen when recording.
+    metadata: new() {
+        ["some_key"] = "data", // Additional key/value pairs to add to a session's metadata. 
+    }
 );
 ```
-
-* `projectId`: Your unique project identifier. 
-* `sessionId`: A unique identifier for each streaming session (we recommend a time-sorted UUID).
-* **Metadata**: Optional key-value pairs that will be recorded and displayed in the viewer.
 
 ### Viewing Recorded Sessions
 
