@@ -5,6 +5,7 @@
 // This service sends several streams to the server:
 //  - Video capture of the main camera (captured using render textures and sent through the hardware encoder)
 //  - A tail of the Unity Player.log. This is more detailed than the stream of Debug.Log messages.
+//  - An efficient packed UTF16 format of Debug.Log messages and stacktraces.
 //  - General event log from the session stream itself. 
 // 
 // Timestamps are applied to all data streams, to allow replaying the data stream later and synchronizing it with video.
@@ -21,12 +22,10 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
-using Unity.Profiling;
 using Unity.Serialization.Json;
 using Unity.WebRTC;
 using UnityEditor;
@@ -49,8 +48,10 @@ namespace Core.Streaming
         private string hostUrl;
         private string sessionId;
         private string projectId;
-        private bool streamDebugLogs;
-        private List<(string, string)> sessionMetadata;
+        private bool disableDebugLogs;
+        private bool disableTextLogs;
+        private bool showRecordingIcon;
+        private Dictionary<string, string> sessionMetadata;
 
         // WebRTC state
         private WebCamTexture webCamTexture;
@@ -67,11 +68,11 @@ namespace Core.Streaming
 
         // The size of the Unity log on startup. Used in editor to make sure we read from the correct place.
         private long logBytesOnStartup;
-        
+
         // Background threads that send text and structured logs to the server.
         private PollingFileTailer playerLogReader;
         private AsyncLogSender structuredLogSender;
-        
+
         private int statVideoFramesCaptured;
 
         // Time this client will wait for the Whip+WebRTC connection to connect. It doesn't make sense to wait any longer
@@ -84,20 +85,30 @@ namespace Core.Streaming
         private const double GatherTimeoutWithCandidatesFallbackSec = 0.5;
 
         // If we receive no ICE Candidates within this time we call it, and assume the client machine cannot connect.
-        private const double GatherTimeoutNoCandidatesSec = 5.0; // Should really not take more than 5 sec to find candidates.
+        private const double
+            GatherTimeoutNoCandidatesSec = 5.0; // Should really not take more than 5 sec to find candidates.
 
         /// <summary>Connects to the streaming server, and then begins streaming data to it.</summary>
         /// <param name="streamingServer">The URL of the server to stream to.</param>
         /// <param name="projectId">The project id to file this session under.</param>
         /// <param name="sessionId">A unique identifier for every session. We recommend a time-sorted UUID.</param>
-        /// <param name="streamDebugLogs">
-        ///     Whether to stream the C# Debug.Log messages Unity receives, and associated stack traces.
-        ///     Has a tiny performance impact because of the listener registered to Application.logMessageReceivedThreaded. Even if this is disabled, the Player.log will still be streamed.
+        /// <param name="username">A unique id for each user. Shown in the streaming viewer, and used to group sessions from the same user.</param>
+        /// <param name="disableDebugLogs">Disables streaming the C# Debug.Log messages Unity receives.</param>
+        /// <param name="disableTextLogs">
+        ///     Disables streaming the Player.log text file (or Editor.log when in editor). The player
+        ///     log contains more detailed engine-level logging than the debug logs.
         /// </param>
-        /// <param name="sessionMetadata">Any additional metadata to send along with the session. Displayed in the viewer.</param>
+        /// <param name="showRecordingIcon">
+        ///     Renders a red recording dot in the upper right part of the screen when recording a
+        ///     session. Useful to remind the player that the session is being recorded. 
+        /// </param>
+        /// <param name="metadata">Any additional metadata to send along with the session. Displayed in the viewer.</param>
         public static void StartStreamingSession(string streamingServer, string projectId, string sessionId,
-                                                 bool streamDebugLogs,
-                                                 params (string metadataKey, string metadataValue)[] sessionMetadata)
+                                                 string username = null,
+                                                 bool disableDebugLogs = false,
+                                                 bool disableTextLogs = false,
+                                                 bool showRecordingIcon = false,
+                                                 Dictionary<string, string> metadata = null)
         {
             // Grab the current size of the Unity.log. In the editor, this is useful so that we start streaming logs
             // from the start of the session rather than the start of the file. We want to grab this size as early as possible,
@@ -112,34 +123,53 @@ namespace Core.Streaming
             Assert.IsNull(FindAnyObjectByType<SessionStreamer>(),
                 "Session streamer already exists! Previous session did not close properly.");
 
+            if (!Uri.IsWellFormedUriString(streamingServer, UriKind.Absolute))
+            {
+                Debug.LogError($"(SessionStreamer) Streaming server URL is not a valid URL: [{streamingServer}]");
+                return;
+            }
+
             GameObject streamGo = new("SessionStreamer");
             DontDestroyOnLoad(streamGo);
 
             var streamer = streamGo.AddComponent<SessionStreamer>();
-            
+
             // Start receiving log messges. We do this as early as possible.
             streamer.structuredLogSender = new AsyncLogSender();
-            
+
             streamer.hostUrl = streamingServer;
             streamer.sessionId = sessionId;
             streamer.projectId = projectId;
-            streamer.sessionMetadata = sessionMetadata.ToList();
+            streamer.sessionMetadata = metadata ?? new Dictionary<string, string>();
             streamer.logBytesOnStartup = logSize;
-            streamer.streamDebugLogs = streamDebugLogs;
-            
+            streamer.disableDebugLogs = disableDebugLogs;
+            streamer.disableTextLogs = disableTextLogs;
+            streamer.showRecordingIcon = showRecordingIcon;
+
             // We store a manual timezone offset, because TimeZoneInfo.Id is not implemented consistently on all platforms.
             // Format the timezone offset into the ISO 8601 standard (e.g., +05:30 or -07:00).
             TimeSpan offset = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now);
             string formattedOffset = $"{(offset < TimeSpan.Zero ? "-" : "+")}{offset:hh\\:mm}";
 
-            // Default metadata.
-            streamer.sessionMetadata.Add(("timestamp_utc",
-                XmlConvert.ToString(DateTime.Now, XmlDateTimeSerializationMode.Utc)));
-            streamer.sessionMetadata.Add(("timezone", TimeZoneInfo.Local.Id));
-            streamer.sessionMetadata.Add(("timezone_offset", formattedOffset));
-            streamer.sessionMetadata.Add(("is_editor", Application.isEditor ? "true" : "false"));
-            streamer.sessionMetadata.Add(("engine", "unity"));
-            streamer.sessionMetadata.Add(("client_version", "1"));
+            try
+            {
+                // Metadata used by SessionStream itself. 
+                streamer.sessionMetadata.Add("username", username);
+                streamer.sessionMetadata.Add("timestamp_utc",
+                    XmlConvert.ToString(DateTime.Now, XmlDateTimeSerializationMode.Utc));
+                streamer.sessionMetadata.Add("timezone", TimeZoneInfo.Local.Id);
+                streamer.sessionMetadata.Add("timezone_offset", formattedOffset);
+                streamer.sessionMetadata.Add("is_editor", Application.isEditor ? "true" : "false");
+                streamer.sessionMetadata.Add("engine", "unity");
+                streamer.sessionMetadata.Add("client_version", "1");
+            }
+            catch (ArgumentException e)
+            {
+                Debug.LogException(new Exception("Metadata key is used internally, choose a different one.", e));
+                
+                // Stop the session.
+                DestroyImmediate(streamGo);
+            }
         }
 
         /// <summary>
@@ -200,33 +230,36 @@ namespace Core.Streaming
 
             // Unity Full Log Data Channel: Streams the Unity Player.log file.
             // Timestamps are applied during polling of this file, and are in nanoseconds since the Unix epoch (UTC).
-            if (!string.IsNullOrEmpty(Application.consoleLogPath))
+            if (!disableTextLogs)
             {
-                VerboseLog("SessionStreamer", "Adding Unity logs channel: [text_log]");
-                logDataChannel = pc.CreateDataChannel("text_log", new RTCDataChannelInit
+                if (!string.IsNullOrEmpty(Application.consoleLogPath))
                 {
-                    // This is our custom timestamped format so we can associate logs with the time they originated.
-                    // Each data packet sent is prepended with the timestamp (nanos since unix epoch)
-                    protocol = "timestamped_bytes"
-                });
-                logDataChannel.OnOpen = StartStreamUnityLogs;
-                logDataChannel.OnClose = StopStreamUnityLogs;
-            }
-            else
-            {
-                var message = $"Platform [{Application.platform}] does not support Unity.log files. Not sending.";
-                SendClientMessage(new ClientMessage
+                    VerboseLog("SessionStreamer", "Adding Unity logs channel: [text_log]");
+                    logDataChannel = pc.CreateDataChannel("text_log", new RTCDataChannelInit
+                    {
+                        // This is our custom timestamped format so we can associate logs with the time they originated.
+                        // Each data packet sent is prepended with the timestamp (nanos since unix epoch)
+                        protocol = "timestamped_bytes"
+                    });
+                    logDataChannel.OnOpen = StartStreamUnityLogs;
+                    logDataChannel.OnClose = StopStreamUnityLogs;
+                }
+                else
                 {
-                    message = message,
-                    kind = ClientMessageKind.Info
-                });
-                Debug.LogWarning("(SessionStreamer)" + message);
+                    var message = $"Platform [{Application.platform}] does not support Unity.log files. Not sending.";
+                    SendClientMessage(new ClientMessage
+                    {
+                        message = message,
+                        kind = ClientMessageKind.Info
+                    });
+                    Debug.LogWarning("(SessionStreamer)" + message);
+                }
             }
 
             // Unity Structured C# Log
             // Streams the Log, Warning, Error, etc objects that come from Unity's callback. 
             // Will not report native errors, but useful for knowing precisely about gameplay errors.
-            if (streamDebugLogs)
+            if (!disableDebugLogs)
             {
                 VerboseLog("SessionStreamer", "Adding Structured logs channel: [structured_log]");
                 structuredLogDataChannel = pc.CreateDataChannel("structured_log", new RTCDataChannelInit
@@ -471,7 +504,6 @@ namespace Core.Streaming
             structuredLogSender?.Dispose();
             structuredLogSender = null;
         }
-
 
         private void ValidateTransceivers()
         {
@@ -807,6 +839,34 @@ namespace Core.Streaming
         private static void VerboseLog(string header, string text)
         {
             Debug.Log($"({header}) {text}");
+        }
+
+        private void OnGUI()
+        {
+            if (showRecordingIcon)
+            {
+                float dotSize = 8.0f;
+                float padding = 15.0f;
+
+                // Define the rectangle for the dot in the top-right corner
+                Rect dotRect = new Rect(
+                    Screen.width - dotSize - padding,
+                    padding,
+                    dotSize,
+                    dotSize
+                );
+
+                // Use Time.time to create a blinking effect (on/off every half second)
+                // Using a hard step function instead of a smooth sine wave for a classic blink
+                bool isVisible = Mathf.FloorToInt(Time.time * 2.0f) % 6 == 0;
+
+                if (isVisible)
+                {
+                    // Set the color to red and draw a simple white texture, which gets tinted
+                    GUI.color = Color.red;
+                    GUI.DrawTexture(dotRect, Texture2D.whiteTexture, ScaleMode.ScaleToFit);
+                }
+            }
         }
 
         private void OnDestroy()
