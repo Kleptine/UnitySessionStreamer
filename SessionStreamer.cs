@@ -54,7 +54,6 @@ namespace Core.Streaming
         private Dictionary<string, string> sessionMetadata;
 
         // WebRTC state
-        private WebCamTexture webCamTexture;
         private MediaStream videoStream;
         private AudioStreamTrack audioStreamTrack;
         private RTCPeerConnection pc;
@@ -898,9 +897,6 @@ namespace Core.Streaming
             pc?.Close();
             pc?.Dispose();
             pc = null;
-
-            webCamTexture?.Stop();
-            webCamTexture = null;
 
             if (capturedScreenTexture)
             {
