@@ -6,6 +6,15 @@ using System.Threading.Tasks;
 using Unity.Profiling;
 using UnityEngine; // For Task.Delay
 
+/// <summary>
+/// This class polls a file on disk, returning timestamped byte chunks that can be forwarded
+/// to the session streamer. We use this to log the Player.log or Editor.log files, which only
+/// exist on disk and contain advanced debugging information not present in the normal C# Debug log.
+/// </summary>
+/// <remarks>
+/// The performance of this is carefully engineered to avoid allocation and all file
+/// reading runs on a background thread.
+/// </remarks>
 public class PollingFileTailer : IDisposable
 {
     private CancellationTokenSource cancelSource;
@@ -23,7 +32,7 @@ public class PollingFileTailer : IDisposable
 
         Task.Run(async () =>
         {
-            Debug.Log($"Started polling '{filePath}' every {pollingInterval.TotalMilliseconds}ms.");
+            Debug.Log($"(SessionStreamer) Started polling '{filePath}' every {pollingInterval.TotalMilliseconds}ms.");
 
             try
             {
@@ -105,7 +114,7 @@ public class PollingFileTailer : IDisposable
         {
             return;
         }
-        Debug.Log($"Tailing stopped for file [{filePath}].");
+        Debug.Log($"(SessionStreamer) Tailing stopped for file [{filePath}].");
         cancelSource.Cancel();
         cancelSource.Dispose();
         cancelSource = null;
