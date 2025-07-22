@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Unity.Profiling;
@@ -86,11 +85,17 @@ namespace Core.Streaming
             // Calculate the exact required size
             int packetSize =
                 sizeof(long) +
-                Unsafe.SizeOf<LogType>() +
+                sizeof(LogType) +
                 sizeof(int) +
                 message.Length * sizeof(char) +
                 sizeof(int) +
                 stackTrace.Length * sizeof(char);
+
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalse
+            if (sizeof(LogType) != sizeof(int))
+            {
+                throw new Exception($"Log type {logType} has an unsupported size [{sizeof(LogType)}].");
+            }
 
             // Rent a buffer from the shared memory pool. This may be larger than the packet and contain junk data.
             var packetBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
@@ -103,22 +108,20 @@ namespace Core.Streaming
             offset += sizeof(long);
 
             // Write the log type.
-            Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(span.Slice(offset)), logType);
-            offset += Unsafe.SizeOf<LogType>();
+            BitConverter.TryWriteBytes(span.Slice(offset), (int) logType);
+            offset += sizeof(LogType);
 
             // Write the message length.
-            Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(span.Slice(offset)),
-                message.Length * sizeof(char));
-            offset += Unsafe.SizeOf<int>();
+            BitConverter.TryWriteBytes(span.Slice(offset), message.Length * sizeof(char));
+            offset += sizeof(int);
 
             // Write the message string UTF16 bytes.
             MemoryMarshal.AsBytes(message.AsSpan()).CopyTo(span.Slice(offset));
             offset += message.Length * sizeof(char);
 
             // Write the stacktrace length.
-            Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(span.Slice(offset)),
-                stackTrace.Length * sizeof(char));
-            offset += Unsafe.SizeOf<int>();
+            BitConverter.TryWriteBytes(span.Slice(offset), stackTrace.Length * sizeof(char));
+            offset += sizeof(int);
 
             // Write the stacktrace string UTF16 bytes.
             MemoryMarshal.AsBytes(stackTrace.AsSpan()).CopyTo(span.Slice(offset));
