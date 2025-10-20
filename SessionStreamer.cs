@@ -255,7 +255,24 @@ namespace Core.Streaming
             pc.OnIceConnectionChange = state => VerboseLog("WebRTC", $"Ice Connection Changed: {state}");
             pc.OnIceGatheringStateChange = state => VerboseLog("WebRTC", $"Ice Gather state changed: {state}");
             pc.OnTrack = e => VerboseLog("WebRTC", $"OnTrack: {e.Track.Kind} id={e.Track.Id}");
-            pc.OnConnectionStateChange = state => VerboseLog("WebRTC", $"PeerConnection State Changed: {state}");
+            pc.OnConnectionStateChange = state =>
+            {
+                switch (state)
+                {
+                    case RTCPeerConnectionState.Failed:
+                        Debug.LogWarning("(SessionStreamer) WebRTC connection failed.");
+                        break;
+                    case RTCPeerConnectionState.Closed:
+                        Debug.Log("(SessionStreamer) WebRTC connection closed.");
+                        break;
+                    case RTCPeerConnectionState.Disconnected:
+                        Debug.Log("(SessionStreamer) WebRTC connection disconnected.");
+                        break;
+                    default:
+                        VerboseLog("WebRTC", $"PeerConnection State Changed: {state}");
+                        break;
+                }
+            };
 
             // Connect our general data channel for sending and receiving logs from the server.
             VerboseLog("SessionStreamer", "Adding data channel: [general]");
