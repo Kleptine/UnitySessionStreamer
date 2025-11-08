@@ -351,6 +351,10 @@ namespace Core.Streaming
             VideoStreamTrack videoStreamTrack = new(sessionScreenTexture, Graphics.Blit);
 
             RTCRtpSender videoTrackSender = pc.AddTrack(videoStreamTrack);
+            var codecPreference = RTCRtpSender.GetCapabilities(TrackKind.Video).codecs;
+            
+            // Sort hardware codec first
+            codecPreference = codecPreference.OrderByDescending(c => c.mimeType.Contains("H264")).ToArray();
 
             var parameters = videoTrackSender.GetParameters();
             foreach (RTCRtpEncodingParameters encoding in parameters.encodings)
@@ -361,6 +365,9 @@ namespace Core.Streaming
             foreach (var transceiver in pc.GetTransceivers())
             {
                 transceiver.Direction = RTCRtpTransceiverDirection.SendOnly;
+                
+                // Order codecs by preference.
+                transceiver.SetCodecPreferences(codecPreference);
             }
 
             ValidateTransceivers();
