@@ -50,6 +50,7 @@ namespace Core.Streaming
         private string projectId;
         private bool disableDebugLogs;
         private bool disableTextLogs;
+        private bool disableVideoStream;
         private bool showRecordingIcon;
         private Dictionary<string, string> sessionMetadata;
 
@@ -97,6 +98,7 @@ namespace Core.Streaming
         ///     Disables streaming the Player.log text file (or Editor.log when in editor). The player
         ///     log contains more detailed engine-level logging than the debug logs.
         /// </param>
+        /// <param name="disableVideoStream">Disables streaming rendered frames to the server.</param>
         /// <param name="showRecordingIcon">
         ///     Renders a red recording dot in the upper right part of the screen when recording a
         ///     session. Useful to remind the player that the session is being recorded. 
@@ -106,6 +108,7 @@ namespace Core.Streaming
             string username = null,
             bool disableDebugLogs = false,
             bool disableTextLogs = false,
+            bool disableVideoStream = false,
             bool showRecordingIcon = false,
             Dictionary<string, string> metadata = null)
         {
@@ -163,6 +166,7 @@ namespace Core.Streaming
             streamer.logBytesOnStartup = logSize;
             streamer.disableDebugLogs = disableDebugLogs;
             streamer.disableTextLogs = disableTextLogs;
+            streamer.disableVideoStream = disableVideoStream;
             streamer.showRecordingIcon = showRecordingIcon;
 
             // We store a manual timezone offset, because TimeZoneInfo.Id is not implemented consistently on all platforms.
@@ -227,8 +231,12 @@ namespace Core.Streaming
 
                 url = urlWithParam;
             }
-
-            Debug.Log($"(SessionStreamer) Requesting new stream on url [{url}]");
+            
+            Debug.Log($"(SessionStreamer) Requesting new stream on url [{url}]. Details:\n" +
+                      $"disableDebugLogs=[{disableDebugLogs}]\n" +
+                      $"disableTextLogs=[{disableTextLogs}]\n" +
+                      $"disableVideoStream=[{disableVideoStream}]\n" +
+                      $"showRecordingIcon=[{showRecordingIcon}]");
 
             // Create the Peer Connection. We use Google's STUN servers to detect our public IP address.
             var config = new RTCConfiguration
@@ -327,50 +335,53 @@ namespace Core.Streaming
             // Video Track: Records the main camera video.
             // Timestamps are applied during packetizing to RTP, and will have units specified in number of 'clock ticks'
             // of the video stream's clock rate (usually 90000Hz). This is all handled by WebRTC & RTP.
-            foreach (var c in RTCRtpSender.GetCapabilities(TrackKind.Video).codecs)
+            if (!disableVideoStream)
             {
-                VerboseLog(
-                    "WebRTC", "Sender Video Encoder Capability: " +
-                              $"mimetype={c.mimeType} clockrate={c.clockRate} channels={c.channels} sdpline={c.sdpFmtpLine}");
+                foreach (var c in RTCRtpSender.GetCapabilities(TrackKind.Video).codecs)
+                {
+                    VerboseLog(
+                        "WebRTC", "Sender Video Encoder Capability: " +
+                                  $"mimetype={c.mimeType} clockrate={c.clockRate} channels={c.channels} sdpline={c.sdpFmtpLine}");
+                }
+
+                Vector2Int capturedScreenSize = GetScreenSize();
+
+                GraphicsFormat format = WebRTC.GetSupportedGraphicsFormat(SystemInfo.graphicsDeviceType);
+                capturedScreenTexture = new RenderTexture(capturedScreenSize.x, capturedScreenSize.y, 0, format);
+                capturedScreenTexture.Create();
+
+                Vector2Int sessionScreenSize = FitInside1280X720(capturedScreenSize);
+                sessionScreenTexture = new RenderTexture(sessionScreenSize.x, sessionScreenSize.y, 0, format);
+                sessionScreenTexture.Create();
+
+                Debug.Log(
+                    $"(SessionStreamer) Adding video track. Captured resolution: [{capturedScreenSize}] => Sent resolution: [{sessionScreenSize}]");
+
+                // Graphics.Blit is necessary to avoid a default vertical flip. I'm not sure why that's the default.
+                VideoStreamTrack videoStreamTrack = new(sessionScreenTexture, Graphics.Blit);
+
+                RTCRtpSender videoTrackSender = pc.AddTrack(videoStreamTrack);
+                var codecPreference = RTCRtpSender.GetCapabilities(TrackKind.Video).codecs;
+
+                // Sort hardware codec first
+                codecPreference = codecPreference.OrderByDescending(c => c.mimeType.Contains("H264")).ToArray();
+
+                var parameters = videoTrackSender.GetParameters();
+                foreach (RTCRtpEncodingParameters encoding in parameters.encodings)
+                {
+                    encoding.maxFramerate = 30;
+                }
+
+                foreach (var transceiver in pc.GetTransceivers())
+                {
+                    transceiver.Direction = RTCRtpTransceiverDirection.SendOnly;
+
+                    // Order codecs by preference.
+                    transceiver.SetCodecPreferences(codecPreference);
+                }
+
+                ValidateTransceivers();
             }
-
-            Vector2Int capturedScreenSize = GetScreenSize();
-
-            GraphicsFormat format = WebRTC.GetSupportedGraphicsFormat(SystemInfo.graphicsDeviceType);
-            capturedScreenTexture = new RenderTexture(capturedScreenSize.x, capturedScreenSize.y, 0, format);
-            capturedScreenTexture.Create();
-
-            Vector2Int sessionScreenSize = FitInside1280X720(capturedScreenSize);
-            sessionScreenTexture = new RenderTexture(sessionScreenSize.x, sessionScreenSize.y, 0, format);
-            sessionScreenTexture.Create();
-
-            Debug.Log(
-                $"(SessionStreamer) Adding video track. Captured resolution: [{capturedScreenSize}] => Sent resolution: [{sessionScreenSize}]");
-
-            // Graphics.Blit is necessary to avoid a default vertical flip. I'm not sure why that's the default.
-            VideoStreamTrack videoStreamTrack = new(sessionScreenTexture, Graphics.Blit);
-
-            RTCRtpSender videoTrackSender = pc.AddTrack(videoStreamTrack);
-            var codecPreference = RTCRtpSender.GetCapabilities(TrackKind.Video).codecs;
-            
-            // Sort hardware codec first
-            codecPreference = codecPreference.OrderByDescending(c => c.mimeType.Contains("H264")).ToArray();
-
-            var parameters = videoTrackSender.GetParameters();
-            foreach (RTCRtpEncodingParameters encoding in parameters.encodings)
-            {
-                encoding.maxFramerate = 30;
-            }
-
-            foreach (var transceiver in pc.GetTransceivers())
-            {
-                transceiver.Direction = RTCRtpTransceiverDirection.SendOnly;
-                
-                // Order codecs by preference.
-                transceiver.SetCodecPreferences(codecPreference);
-            }
-
-            ValidateTransceivers();
 
             // Begin polling for Ice Candidates.
             var offerOp = pc.CreateOffer();
@@ -543,8 +554,12 @@ namespace Core.Streaming
 
             // Once we are connected, capturing and pumping frames will be kicked off by the Start() coroutine.
             StartCoroutine(WebRTC.Update());
-            StartCoroutine(RecordScreenFrames());
-            StartCoroutine(CheckStats());
+
+            if (!disableVideoStream)
+            {
+                StartCoroutine(CheckVideoStats());
+                StartCoroutine(RecordScreenFrames());
+            }
         }
 
         private void StartStreamingDebugLogs()
@@ -752,7 +767,7 @@ namespace Core.Streaming
             return new Vector2Int(width, height);
         }
 
-        private IEnumerator CheckStats()
+        private IEnumerator CheckVideoStats()
         {
             yield return new WaitForEndOfFrame();
 
