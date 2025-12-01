@@ -629,6 +629,11 @@ namespace Core.Streaming
 
         private void SendPacket(RTCDataChannel channel, Memory<byte> packet)
         {
+            if (channel.ReadyState != RTCDataChannelState.Open)
+            {
+                throw new Exception($"(SessionStreamer) Datachannel is in incorrect state for sending. [{channel.ReadyState}]");
+                // The exception handler will close the packet sending.
+            }
             // Send the data. Requires unsafe to grab the pointer.
             // UNSAFE: The packet length can never be longer than the memory region, so we can't read uninitialized
             // memory. We clean up the pinned memory with 'using'.
