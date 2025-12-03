@@ -1,7 +1,9 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using Unity.Profiling;
 using UnityEngine;
@@ -15,9 +17,15 @@ namespace Core.Streaming
     /// </summary>
     public class AsyncLogSender : IDisposable
     {
+        // The maximum size in bytes a datachannel message can be. This is usually negotiated via max-message-size, 
+        // however there's no easy way to pull this out of the WebRTC C# package. The package requests 2^18, but 
+        // that seems to still cause failures so we've lowered it to 2^16, which is the first multiple of 2 that
+        // doesn't close the chanel.
+        private const int MaxSizeDataChannelMessageBytes = 1 << 16; 
+            
         // Before the session connects, this list stores received log messages, and they are sent immediately
         // on connection. This must be thread safe since the log callback is multi-threaded.
-        private readonly BlockingCollection<byte[]> queuedDebugLogMessages = new(1024);
+        private readonly BlockingCollection<ArraySegment<byte>> queuedDebugLogMessages = new(1024);
 
         private bool started;
 
@@ -43,7 +51,7 @@ namespace Core.Streaming
                 long ticksSinceUnixEpoch = currentUtcTimestamp.Ticks - DateTimeOffset.UnixEpoch.Ticks;
                 long nanosSinceLinuxEpoch = ticksSinceUnixEpoch * 100;
 
-                byte[] packet = PacketizeLogMessage(nanosSinceLinuxEpoch, type, message, stackTrace);
+                ArraySegment<byte> packet = PacketizeLogMessage(nanosSinceLinuxEpoch, type, message, stackTrace);
 
                 // Queue the new packet up for sending on a background thread.
                 try
@@ -52,20 +60,20 @@ namespace Core.Streaming
                     {
                         // If this fails, the queue is full. We've queued too many messages without the structured log connecting
                         // and draining them. Just drop the message, since we can't log.
-                        ArrayPool<byte>.Shared.Return(packet);
+                        ArrayPool<byte>.Shared.Return(packet.Array);
                     }
                 }
                 catch (InvalidOperationException)
                 {
                     // InvalidOperationException is when the queue is complete for addition. This can happen if we have
                     // unfinished ReceiveThreadedLogMessage callbacks running while the session shuts down. Just drop them.
-                    ArrayPool<byte>.Shared.Return(packet);
+                    ArrayPool<byte>.Shared.Return(packet.Array);
                 }
                 catch
                 {
                     // If an unhandled exception is thrown, that's a bug. Let it bubble up.
                     // Can't be a finally, because we move the packet into the queue in the try {}
-                    ArrayPool<byte>.Shared.Return(packet);
+                    ArrayPool<byte>.Shared.Return(packet.Array);
                     throw;
                 }
             }
@@ -79,23 +87,33 @@ namespace Core.Streaming
         //  - message UTF16 bytes (N bytes)
         //  - stacktrace length in bytes (i32) (4 byte)
         //  - stacktrace UTF16 bytes (M bytes)
-        private byte[] PacketizeLogMessage(long nanosecondsSinceUnixEpoch, LogType logType, string message,
+        private ArraySegment<byte> PacketizeLogMessage(long nanosecondsSinceUnixEpoch, LogType logType, string message,
                                                        string stackTrace)
         {
-            // Calculate the exact required size
-            int packetSize =
-                sizeof(long) +
-                sizeof(LogType) +
-                sizeof(int) +
-                message.Length * sizeof(char) +
-                sizeof(int) +
-                stackTrace.Length * sizeof(char);
-
             // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (sizeof(LogType) != sizeof(int))
             {
                 throw new Exception($"Log type {logType} has an unsupported size [{sizeof(LogType)}].");
             }
+            
+            // The packet size varies, but is capped to avoid closing the RTC data channel on a big message or stack.
+            // First calculate the size of the metadata in bytes:
+            int packetSize =
+                sizeof(long) + // timestamp
+                sizeof(LogType) + // log type
+                sizeof(int) + // message length
+                sizeof(int); // stacktrace length
+                
+            // Fill out the stack trace first, since we assume that's smaller than the message, and when
+            // the message is too big, we assume it's more critical to have the stack trace.
+            int maxStackSizeChars = (MaxSizeDataChannelMessageBytes - packetSize) / sizeof(char); // floor to nearest number of char
+            int stackTraceSizeChars = Math.Min(stackTrace.Length, maxStackSizeChars);
+            packetSize += stackTraceSizeChars * sizeof(char);
+            
+            // Now fill out the message, ensuring we don't exceed the total message size.
+            int maxMessageSizeChars = (MaxSizeDataChannelMessageBytes - packetSize) / sizeof(char); // floor to nearest number of char
+            int messageSizeChars = Math.Min(message.Length, maxMessageSizeChars);
+            packetSize += messageSizeChars * sizeof(char);
 
             // Rent a buffer from the shared memory pool. This may be larger than the packet and contain junk data.
             var packetBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
@@ -112,24 +130,24 @@ namespace Core.Streaming
             offset += sizeof(LogType);
 
             // Write the message length.
-            BitConverter.TryWriteBytes(span.Slice(offset), message.Length * sizeof(char));
+            BitConverter.TryWriteBytes(span.Slice(offset), messageSizeChars * sizeof(char));
             offset += sizeof(int);
 
             // Write the message string UTF16 bytes.
-            MemoryMarshal.AsBytes(message.AsSpan()).CopyTo(span.Slice(offset));
-            offset += message.Length * sizeof(char);
+            MemoryMarshal.AsBytes(message.AsSpan(0, messageSizeChars)).CopyTo(span.Slice(offset));
+            offset += messageSizeChars * sizeof(char);
 
             // Write the stacktrace length.
-            BitConverter.TryWriteBytes(span.Slice(offset), stackTrace.Length * sizeof(char));
+            BitConverter.TryWriteBytes(span.Slice(offset), stackTraceSizeChars * sizeof(char));
             offset += sizeof(int);
 
             // Write the stacktrace string UTF16 bytes.
-            MemoryMarshal.AsBytes(stackTrace.AsSpan()).CopyTo(span.Slice(offset));
+            MemoryMarshal.AsBytes(stackTrace.AsSpan(0, stackTraceSizeChars)).CopyTo(span.Slice(offset));
 
-            return packetBuffer;
+            return new ArraySegment<byte>(packetBuffer, 0, packetSize);
         }
 
-        public void BeginSending(Action<byte[]> sendAction)
+        public void BeginSending(Action<ArraySegment<byte>> sendAction)
         {
             if (queuedDebugLogMessages.IsAddingCompleted)
             {
@@ -158,7 +176,7 @@ namespace Core.Streaming
                         {
                             sendAction(packet);
                         }
-                        ArrayPool<byte>.Shared.Return(packet);
+                        ArrayPool<byte>.Shared.Return(packet.Array);
                     }
                 }
                 catch (Exception e)
@@ -195,7 +213,7 @@ namespace Core.Streaming
                 // Streaming never began. Just drain the messages here and dispose.
                 foreach (var packet in queuedDebugLogMessages.GetConsumingEnumerable())
                 {
-                    ArrayPool<byte>.Shared.Return(packet);
+                    ArrayPool<byte>.Shared.Return(packet.Array);
                 }
                 queuedDebugLogMessages.Dispose();
             }
