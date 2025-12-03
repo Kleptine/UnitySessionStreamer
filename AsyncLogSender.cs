@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -108,12 +109,14 @@ namespace Core.Streaming
             // the message is too big, we assume it's more critical to have the stack trace.
             int maxStackSizeChars = (MaxSizeDataChannelMessageBytes - packetSize) / sizeof(char); // floor to nearest number of char
             int stackTraceSizeChars = Math.Min(stackTrace.Length, maxStackSizeChars);
-            packetSize += stackTraceSizeChars * sizeof(char);
+            int stackTraceSizeBytes = stackTraceSizeChars * sizeof(char);
+            packetSize += stackTraceSizeBytes;
             
             // Now fill out the message, ensuring we don't exceed the total message size.
             int maxMessageSizeChars = (MaxSizeDataChannelMessageBytes - packetSize) / sizeof(char); // floor to nearest number of char
             int messageSizeChars = Math.Min(message.Length, maxMessageSizeChars);
-            packetSize += messageSizeChars * sizeof(char);
+            int messageSizeBytes = messageSizeChars * sizeof(char);
+            packetSize += messageSizeBytes;
 
             // Rent a buffer from the shared memory pool. This may be larger than the packet and contain junk data.
             var packetBuffer = ArrayPool<byte>.Shared.Rent(packetSize);
@@ -126,19 +129,19 @@ namespace Core.Streaming
             offset += sizeof(long);
 
             // Write the log type.
-            BitConverter.TryWriteBytes(span.Slice(offset), (int) logType);
-            offset += sizeof(LogType);
+            BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset), (int) logType);
+            offset += sizeof(int);
 
             // Write the message length.
-            BitConverter.TryWriteBytes(span.Slice(offset), messageSizeChars * sizeof(char));
+            BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset), messageSizeBytes);
             offset += sizeof(int);
 
             // Write the message string UTF16 bytes.
             MemoryMarshal.AsBytes(message.AsSpan(0, messageSizeChars)).CopyTo(span.Slice(offset));
-            offset += messageSizeChars * sizeof(char);
+            offset += messageSizeBytes;
 
             // Write the stacktrace length.
-            BitConverter.TryWriteBytes(span.Slice(offset), stackTraceSizeChars * sizeof(char));
+            BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset), stackTraceSizeBytes);
             offset += sizeof(int);
 
             // Write the stacktrace string UTF16 bytes.
