@@ -829,6 +829,23 @@ namespace Core.Streaming
             while (true)
             {
                 yield return waitOp;
+                
+                if (capturedScreenTexture == null || 
+                    capturedScreenTexture.width != Screen.width || 
+                    capturedScreenTexture.height != Screen.height)
+                {
+                    if (capturedScreenTexture != null)
+                    {
+                        capturedScreenTexture.Release();
+                    }
+
+                    // Create a new texture matching the CURRENT screen resolution
+                    capturedScreenTexture = new RenderTexture(Screen.width, Screen.height, 0);
+                    capturedScreenTexture.Create();
+                    
+                    VerboseLog("SessionStreamer", "Screen resolution changed. New captured resolution: [" + Screen.width + "x" + Screen.height + "]");
+                }
+                
                 ScreenCapture.CaptureScreenshotIntoRenderTexture(capturedScreenTexture);
                 Graphics.Blit(capturedScreenTexture, sessionScreenTexture);
                 statVideoFramesCaptured++;
