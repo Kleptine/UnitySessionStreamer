@@ -748,6 +748,7 @@ namespace Core.Streaming
         }
 
         // Returns the largest screen size that fits within 1280x720. This corresponds to level 3.1 in H264.
+        // We round the final dimensions down to the nearest even number, as H.264 encoders often require even dimensions.
         private static Vector2Int FitInside1280X720(Vector2Int screenDimensions)
         {
             const int maxWidth = 1280;
@@ -768,6 +769,10 @@ namespace Core.Streaming
                 height = maxHeight;
                 width = (int)(height * aspectRatio);
             }
+            
+            // Floor to nearest even dimension.
+            width &= ~1; 
+            height &= ~1;
 
             return new Vector2Int(width, height);
         }
