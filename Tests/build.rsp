@@ -1,0 +1,4 @@
+/target:exe
+/out:StandaloneDownloadTest.exe
+/langversion:latest
+StandaloneDownloadTest.cs

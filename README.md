@@ -63,7 +63,36 @@ The session link will also be emitted in the Unity log for easy access.
 
 ### Running in the Editor
 
-Session Streamer *can* run in the Editor during Play Mode, in which case the Editor.log will be streamed instead of the Player.log. 
+Session Streamer *can* run in the Editor during Play Mode, in which case the Editor.log will be streamed instead of the Player.log.
+
+### In-Game Log Viewer and Download
+
+The `LogDisplayUI` component provides an in-game UI for viewing and downloading Unity logs:
+
+```csharp
+using Core.Streaming;
+
+// Add LogDisplayUI to view and download logs
+GameObject logUIObject = new GameObject("LogDisplayUI");
+DontDestroyOnLoad(logUIObject);
+logUIObject.AddComponent<LogDisplayUI>();
+```
+
+**Features:**
+- Toggle visibility with the backtick (`` ` ``) key
+- View all Unity logs (Log, Warning, Error, Exception) with color coding
+- Download logs to a text file with the "Download Logs" button
+- Scrollable log viewer with up to 1000 entries
+- Logs are saved to `Application.persistentDataPath/ExportedLogs/`
+
+**Usage:**
+1. Press `` ` `` to open the log viewer
+2. View captured logs in the scrollable window
+3. Click "Download Logs" to save all logs to a timestamped file
+4. Click "Clear" to clear the current log buffer
+5. Click "Close" or press `` ` `` again to hide the viewer
+
+See `LogDisplayUI_Example.cs` for more integration examples.
 
 ---
 
