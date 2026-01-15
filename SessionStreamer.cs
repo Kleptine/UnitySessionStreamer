@@ -683,36 +683,45 @@ namespace Core.Streaming
             playerLogReader = new PollingFileTailer(consoleLogPath, startPosition, TimeSpan.FromMilliseconds(16),
                 maxChunkSize, (timestamp, chunk) =>
                 {
-                    if (logDataChannel.ReadyState != RTCDataChannelState.Open)
+                    try
                     {
-                        Debug.LogError(
-                            $"(SessionStreamer) Data channel is not open, cannot send logs. [{logDataChannel.ReadyState}]");
-                        playerLogReader.Dispose();
-                        return;
+                        if (logDataChannel.ReadyState != RTCDataChannelState.Open)
+                        {
+                            Debug.LogError(
+                                $"(SessionStreamer) Data channel is not open, cannot send logs. [{logDataChannel.ReadyState}]");
+                            playerLogReader.Dispose();
+                            return;
+                        }
+
+                        // One additional long for the timestamp.
+                        int packetSize = chunk.Length + sizeof(long);
+
+                        // Get a temporary buffer.
+                        using var bufferOwned = MemoryPool<byte>.Shared.Rent(packetSize);
+                        Memory<byte> buffer = bufferOwned.Memory.Slice(0, packetSize);
+
+                        // Set timestamp as first ~8 bytes.
+                        MemoryMarshal.Write(buffer.Span, ref timestamp);
+
+                        // Set packet body as chunk of data.
+                        // Length of the overall packet is handled by RTP.
+                        chunk.CopyTo(buffer.Slice(sizeof(long), chunk.Length));
+
+                        SendPacket(logDataChannel, buffer);
                     }
-
-                    // One additional long for the timestamp.
-                    int packetSize = chunk.Length + sizeof(long);
-
-                    // Get a temporary buffer.
-                    using var bufferOwned = MemoryPool<byte>.Shared.Rent(packetSize);
-                    Memory<byte> buffer = bufferOwned.Memory.Slice(0, packetSize);
-
-                    // Set timestamp as first ~8 bytes.
-                    MemoryMarshal.Write(buffer.Span, ref timestamp);
-
-                    // Set packet body as chunk of data.
-                    // Length of the overall packet is handled by RTP.
-                    chunk.CopyTo(buffer.Slice(sizeof(long), chunk.Length));
-
-                    SendPacket(logDataChannel, buffer);
+                    catch (Exception e)
+                    {
+                        Debug.LogError("(SessionStreamer) Could not post unity log packet to data channel. Killing log tailer for safety.");
+                        Debug.LogException(e);
+                        playerLogReader.Dispose();
+                    }
                 });
         }
 
         private void StopStreamUnityLogs()
         {
             Debug.Log("(SessionStreamer) Stop tailing Unity log file.");
-            playerLogReader.Stop();
+            playerLogReader?.Stop();
         }
 
         // private void OnAudioFilterRead(float[] data, int channels)

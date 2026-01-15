@@ -89,7 +89,11 @@ public class PollingFileTailer : IDisposable
                             }
                             catch (Exception e)
                             {
+                                Debug.LogError($"(PollingFileTailer) The file tailer callback threw an exception. Killing file tailer [{filePath}] for safety.");
                                 Debug.LogException(e);
+                                break; // Kill the file tailer.
+                                       // Otherwise we might see a cycle of logging exceptions,
+                                       // and throwing more exceptions from the tailer.
                             }
                         }
 
